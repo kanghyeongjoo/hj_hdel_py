@@ -17,15 +17,6 @@ def get_property():
                     att_list.append(tag)
     return att_list
 
-def get_dynamic_property():
-    properties = []
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-GOV-MP":
-            for blo in entity.GetDynamicBlockProperties():  # 동적블럭 속성 가져오기
-                blo_property = {blo.propertyname: blo.value}
-                properties.append(blo_property)
-    return properties
-
 def get_layout_dim():
     dim_list = []
     for entity in doc.ModelSpace:

@@ -62,15 +62,28 @@ def transe_property(tagstring, textstring):
         trs_textstring = re.findall("\d+", textstring)
     elif tagstring == "@USE":
         trs_tagstring = [tagstring]
-        trs_textstring = []
+        be_textstring = []
         be_use = re.sub("\s|\(|\)", "", textstring)
         spc_chr = re.findall("\w\W", be_use)
         while re.search("\W", be_use) != None:
             spc_st = re.search("\W", be_use).start()
             spc_ed = re.search("\W", be_use).end()
-            trs_textstring.append(be_use[:spc_st][:2])
+            be_textstring.append(be_use[:spc_st][:2])
             be_use = be_use.lstrip(be_use[:spc_ed])
-        trs_textstring.append(be_use)
+        be_textstring.append(be_use[:2])
+        if len(be_textstring) == 1:
+            pdm_use_list = {"인승": "PS", "장애": "HC", "비상": "EP", "병원": "BD", "전망": "OB", "누드": "ND", "인화": "PF",
+                            "화물": "FT", "자동차": "AM"}
+            for layout_data, pdm_data in pdm_use_list.items():
+                if layout_data in be_textstring:
+                    trs_textstring = [pdm_data]
+        else:
+            pdm_use_list = {"비상": "E", "병원": "B", "전망": "O", "누드": "N", "인화": "F", "장애": "H"}
+            text_list = []
+            for layout_data, pdm_data in pdm_use_list.items():
+                if layout_data in be_textstring:
+                    text_list.append(pdm_data)
+            trs_textstring=["".join(text_list)]
     elif tagstring == "@MOTOR_CAPA":
         trs_tagstring = [tagstring]
         trs_textstring = re.findall('(\d+[.]?\d?)', textstring)
@@ -80,11 +93,17 @@ def transe_property(tagstring, textstring):
         trs_textstring = re.findall('ø(\d+)', textstring)
         trs_textstring.append(re.findall("X(\d+)", textstring)[0])
         trs_textstring.append(re.findall("\((\d+:\d+)\)", textstring)[0])
+    elif tagstring == "@DOOR_SIZE":
+        trs_tagstring = ["@DOOR_JJ", "@DOOR_HH"]
+        textstring = textstring.replace(" ","")
+        trs_textstring = re.findall('JJ.?(\d+)', textstring)
+        trs_textstring.append(re.findall("HH.?(\d+)", textstring)[0])
     else:
         trs_tagstring=["ttt"]
         trs_textstring=["sdsf"]
 
     return trs_tagstring, trs_textstring
+
 
 el_spec = get_property()
 #el_spec_df = pd.DataFrame(el_spec)
