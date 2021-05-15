@@ -37,3 +37,11 @@ for layout_data, pdm_data in pdm_use_list.items():
         text_list = "".join(pdm_data)
 
 print(text_list)
+
+textstring="dj eolsn eo"
+textstring = textstring.upper().replace(" ", "")
+print(textstring)
+
+tesll = "CA(100)XCB(233)"
+ting = re.search("(CA.?(\d+))|(CB.?(\d+))", tesll).groups()
+print(ting)

@@ -8,9 +8,9 @@ import re
 acad = win32com.client.Dispatch("AutoCAD.Application")
 doc = acad.ActiveDocument
 
-ext_list=["@DOOR_DRIVE","@GOVERNOR","@CAR_SAFETY","@TM_TYPE"] #특성코드와 dic형태로 매칭해주는 것도 생각해볼 것
+ext_list=["@DOOR_DRIVE","@GOVERNOR","@CAR_SAFETY","@TM_TYPE","@CB_TYPE"] #특성코드와 dic형태로 매칭해주는 것도 생각해볼 것
 
-trs_list=["@BALANCE","@NO","@V_SPEC","@DRIVE_TYPE","@DRIVE","@SPEED","@CAPA","@USE","@MOTOR_CAPA","@CB_TYPE","@ROPE_SPEC","@DOOR_SIZE","@CAR_SIZE"] # 변환이 필요한 코드
+trs_list=["@BALANCE","@NO","@V_SPEC","@DRIVE_TYPE","@DRIVE","@SPEED","@CAPA","@USE","@MOTOR_CAPA","@ROPE_SPEC","@DOOR_SIZE","@CAR_SIZE"] # 변환이 필요한 코드
 
 def get_property():
     att_dict = {}
@@ -41,9 +41,8 @@ def transe_property(tagstring, textstring):
             trs_tagstring.append("@NO"+str(car_no))
     elif tagstring == "@V_SPEC":
         trs_tagstring=["@동력전원", "@조명전원", "@주파수"]
-        textstring = textstring.upper()
-        trs_textstring = re.findall("(\d\d\d)V",textstring)
-        trs_textstring.append(re.findall("(\d\d)HZ", textstring)[0])
+        textstring = textstring.upper().replace(" ", "")
+        trs_textstring = re.findall("\d+(?=V)|\d+(?=HZ)",textstring)
     elif tagstring == "@DRIVE_TYPE":
         trs_tagstring = [tagstring]
         car_btn = re.findall("\d+", textstring)
@@ -86,7 +85,7 @@ def transe_property(tagstring, textstring):
             trs_textstring=["".join(text_list)]
     elif tagstring == "@MOTOR_CAPA":
         trs_tagstring = [tagstring]
-        trs_textstring = re.findall('(\d+[.]?\d?)', textstring)
+        trs_textstring = re.findall('(\d+\.?\d?)', textstring)
     elif tagstring == "@ROPE_SPEC":
         trs_tagstring = ["@ROPE_mm", "@ROPE_Q", "@ROPING"]
         textstring = textstring.replace(" ", "")
@@ -95,12 +94,14 @@ def transe_property(tagstring, textstring):
         trs_textstring.append(re.findall("\((\d+:\d+)\)", textstring)[0])
     elif tagstring == "@DOOR_SIZE":
         trs_tagstring = ["@DOOR_JJ", "@DOOR_HH"]
-        textstring = textstring.replace(" ","")
-        trs_textstring = re.findall('JJ.?(\d+)', textstring)
-        trs_textstring.append(re.findall("HH.?(\d+)", textstring)[0])
-    else:
-        trs_tagstring=["ttt"]
-        trs_textstring=["sdsf"]
+        textstring = textstring
+        trs_textstring = re.findall("JJ\D+(\d+)", textstring)
+        trs_textstring.append(re.findall("HH\D+(\d+)", textstring)[0])
+    elif tagstring == "@CAR_SIZE":
+        trs_tagstring = ["@CAR_CA", "@CAR_CB", "@CAR_CH"]
+        trs_textstring = re.findall("CA\D+(\d+)", textstring)
+        trs_textstring.append(re.findall("CB\D+(\d+)", textstring)[0])
+        trs_textstring.append(re.findall("CH\D+(\d+)", textstring)[0])
 
     return trs_tagstring, trs_textstring
 
