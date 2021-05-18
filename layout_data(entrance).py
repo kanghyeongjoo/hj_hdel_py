@@ -16,11 +16,12 @@ def get_property():
                 if att.tagstring == "@TITLE-T" and jamb_kind == "GENERAL":
                     jamb_spec = "JP" + re.findall("\d+", att.textstring)[0]
                 elif att.tagstring == "@TITLE-T" and jamb_kind == "CP_JAMB":
+                    jamb_spec == "CP"+ re.findall("\d+", att.textstring)[0]
                 elif att.tagstring == "@TITLE-B":
                     jamb_type, app_floor = split_floor(att.textstring, jamb_kind, jamb_ord)
                     jamb_dict.update({jamb_type + "종류" : jamb_spec}) # JAMB 종류
                     jamb_dict.update({jamb_type + "적용층" : app_floor}) # JAMB 적용층
-                    jamb_dict.update({"홀버튼 TYPE": btn_type}) #  홀버튼은 반대로 층구분(bot, mid, top)이 반드시 필요함... 추후 과제...(jamb하고 나눌까?)
+                    jamb_dict.update({"홀버튼 TYPE": btn_type}) # 홀버튼 여기가 애매함.
 
     return jamb_dict
 

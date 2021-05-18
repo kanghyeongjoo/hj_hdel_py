@@ -2,11 +2,18 @@ import win32com.client
 import math
 import string
 import fnmatch
+import re
 
 acad = win32com.client.Dispatch("AutoCAD.Application")
+
+for doc in acad.Documents:
+    layout_kind = re.findall("(\w)[.]DWG", doc.Name.upper())
+    if "S" in layout_kind:
+        doc.Activate()
+
 doc = acad.ActiveDocument
 
-def get_table_base_cdnt():
+def get_table_cdnt():
 
     table_blo_y_cdnt = None
     for entity in doc.ModelSpace: # 층고 테이블 분해
@@ -55,7 +62,7 @@ def get_table_base_cdnt():
 
     return start_x_cdnt, end_x_cdnt, start_y_cdnt, end_y_cdnt
 
-def get_floor_and_floor_hight_data(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
+def get_floor_data(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
 
     table_datas_list = {}
     for entity in doc.ModelSpace:  # 테이블에 있는 모든 TEXT는 정렬좌표와 Dictionary로 get
@@ -96,33 +103,31 @@ def get_floor_and_floor_hight_data(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
     return floor_and_floor_hight
 
 
-def floor_Special_Character_slpit(floor_and_floor_hight):
-
+def fl_Spc_Cha_slpit(floor_and_floor_hight):
     comma_split = {}
     for before_floor, hight in floor_and_floor_hight.items():
-        if "," not in before_floor:
+        if "," not in before_floor and "." not in before_floor:
             comma_split.update({before_floor: hight})
-        elif "," in before_floor:
-            comma_split_list = before_floor.split(",")
-            for sp_floor in comma_split_list:
-                comma_split.update({sp_floor: hight})
+        elif "," in before_floor or "." in before_floor:
+            comma_split_list = re.split("[,.]", before_floor)
+            for split_floor in comma_split_list:
+                comma_split.update({split_floor: hight})
 
     tilde_split = {}
     for before_floor, hight in comma_split.items():
-        if "~" not in before_floor:
+        if "~" not in before_floor and "-" not in before_floor:
             tilde_split.update({before_floor: hight})
-        elif "~" in before_floor:
-            for text_index, floor_text in enumerate(before_floor):
-                if floor_text == "~":
-                    start_no = int(before_floor[:text_index])
-                    end_no = int(before_floor[text_index + 1:])
-                    for tilde_floor in range(start_no, end_no + 1):
-                        tilde_split.update({str(tilde_floor): hight})
+        elif "~" in before_floor or "-" in before_floor:
+            st_end_no = re.findall("\d+", before_floor)
+            st_no = int(st_end_no[0])
+            end_no = int(st_end_no[1]) + 1
+            for tilde_floor in range(st_no, end_no):
+                tilde_split.update({str(tilde_floor): hight})
 
     return tilde_split
 
-floor_and_floor_hight = get_floor_and_floor_hight_data(*get_table_base_cdnt())
-final_floor_data = floor_Special_Character_slpit(floor_and_floor_hight)
+fl_and_fl_h = get_floor_data(*get_table_cdnt())
+final_floor_data = fl_Spc_Cha_slpit(fl_and_fl_h)
 
 print(final_floor_data)
 
