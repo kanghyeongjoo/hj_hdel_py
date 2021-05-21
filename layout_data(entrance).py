@@ -2,6 +2,11 @@ import win32com.client
 import re
 
 acad = win32com.client.Dispatch("AutoCAD.Application")
+
+for doc in acad.Documents:
+    layout_kind = re.findall("(\w)[.]DWG", doc.Name.upper())
+    if "E" in layout_kind:
+        doc.Activate()
 doc = acad.ActiveDocument
 
 def get_property():
