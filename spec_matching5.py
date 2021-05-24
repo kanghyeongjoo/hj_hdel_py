@@ -1,3 +1,33 @@
+
+import win32com.client
+import math
+import string
+import fnmatch
+import pandas as pd
+import re
+
+acad = win32com.client.Dispatch("AutoCAD.Application")
+doc = acad.ActiveDocument
+
+def get_property():
+    ext_list=["@DOOR_DRIVE","@GOVERNOR","@CAR_SAFETY","@TM_TYPE","@CB_TYPE"] #특성코드와 dic형태로 매칭해주는 것도 생각해볼 것
+    trs_list=["@BALANCE","@NO","@V_SPEC","@DRIVE_TYPE","@DRIVE","@SPEED","@CAPA","@USE","@MOTOR_CAPA","@ROPE_SPEC","@DOOR_SIZE","@CAR_SIZE"] # 변환이 필요한 코드
+    att_dict = {}
+    for entity in doc.ModelSpace:
+        if entity.EntityName == 'AcDbBlockReference' and entity.Name == "LAD-FORM-A3-DETAIL":
+            for att in entity.GetAttributes():
+                tagstring = att.tagstring
+                textstring = att.textstring
+                if tagstring in ext_list:
+                    att_dict.update({tagstring:textstring})
+                elif tagstring in trs_list:
+                    trs_tagstring, trs_textstring = transe_property(tagstring,textstring) # return된 2개의 값을 받아야함
+                    print(trs_tagstring, trs_textstring)
+                    for odr_trs in range(0,len(trs_tagstring)):
+                        att_dict.update({trs_tagstring[odr_trs]: trs_textstring[odr_trs]})
+            att_list = [att_dict]
+    return att_list
+
 def transe_property(tagstring, textstring):
 
     if tagstring == "@BALANCE":
@@ -73,35 +103,6 @@ def transe_property(tagstring, textstring):
         trs_textstring.append(re.findall("CH\D+(\d+)", textstring)[0])
 
     return trs_tagstring, trs_textstring
-
-import win32com.client
-import math
-import string
-import fnmatch
-import pandas as pd
-import re
-
-acad = win32com.client.Dispatch("AutoCAD.Application")
-doc = acad.ActiveDocument
-
-def get_property():
-    ext_list=["@DOOR_DRIVE","@GOVERNOR","@CAR_SAFETY","@TM_TYPE","@CB_TYPE"] #특성코드와 dic형태로 매칭해주는 것도 생각해볼 것
-    trs_list=["@BALANCE","@NO","@V_SPEC","@DRIVE_TYPE","@DRIVE","@SPEED","@CAPA","@USE","@MOTOR_CAPA","@ROPE_SPEC","@DOOR_SIZE","@CAR_SIZE"] # 변환이 필요한 코드
-    att_dict = {}
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and entity.Name == "LAD-FORM-A3-DETAIL":
-            for att in entity.GetAttributes():
-                tagstring = att.tagstring
-                textstring = att.textstring
-                if tagstring in ext_list:
-                    att_dict.update({tagstring:textstring})
-                elif tagstring in trs_list:
-                    trs_tagstring, trs_textstring = transe_property(tagstring,textstring) # return된 2개의 값을 받아야함
-                    print(trs_tagstring, trs_textstring)
-                    for odr_trs in range(0,len(trs_tagstring)):
-                        att_dict.update({trs_tagstring[odr_trs]: trs_textstring[odr_trs]})
-            att_list = [att_dict]
-    return att_list
 
 
 el_spec = get_property()

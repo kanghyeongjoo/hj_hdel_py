@@ -78,9 +78,9 @@ def get_floor_data(proj_no):
             df_floor_data.loc[fl_idx, "방화도어"] = fire_door
 
     doc = layout_find(proj_no, "E")
-    df_floor_data = get_hbtn(df_floor_data)
+    df_floor_data, remote_cp = get_hall_part(df_floor_data)
 
-    return df_floor_data, total_floor, stop_floor
+    return df_floor_data, total_floor, stop_floor, remote_cp
 
 
 def get_table_cdnt(table_type, table_y_cdnt, palette_area):
@@ -255,37 +255,46 @@ def special_str_split(floor_mark):
 
     return floor_mark_list
 
-def get_hbtn(floor_data):
+def get_hall_part(floor_data):
     jamb_dict={}
-    floor_data[["JAMB", "JAMB_SPEC","홀버튼","위치"]] = ""
+    remote_cp = "N"
+    floor_data[["JAMB", "JAMB_SPEC","홀버튼", "HPI","위치"]] = ""
     for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TITLE":
+        if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-REMOTE-CP":
+            remote_cp = "Y"
+        elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TITLE":
             dwg_boundary = (238 * 388) * entity.XEffectiveScaleFactor # 도면 경계 SIZE * 축적
-            btn_type = get_btn_type(entity.InsertionPoint, dwg_boundary)
+            btn_type, lantern = get_hall_item(entity.InsertionPoint, dwg_boundary)
             for att in entity.GetAttributes():
                 if att.tagstring == "@TITLE-T":
-                    app_jamb, jamb_spec = get_jamb_type(entity.InsertionPoint, dwg_boundary, att.textstring)
+                    app_jamb, jamb_spec, hpi = get_jamb_type(entity.InsertionPoint, dwg_boundary, att.textstring)
             for att in entity.GetAttributes():
                 if att.tagstring == "@TITLE-B":
                     textstring = att.textstring.replace(" ", "")
                     if "기준층" in textstring:
                         app_floor = re.findall("기준층.?(\w+)층", textstring)[0]
-                        fl_idx = floor_data.index[floor_data["층표기"] == app_floor] # 빈값을 넣고, 비어 있으면 기타층으론 넣는다
-                        floor_data.loc[fl_idx, "홀버튼"] = btn_type
+                        fl_idx = floor_data.index[floor_data["층표기"] == app_floor]
                         floor_data.loc[fl_idx, "JAMB"] = app_jamb
                         floor_data.loc[fl_idx, "JAMB_SPEC"] = jamb_spec
+                        floor_data.loc[fl_idx, "홀버튼"] = btn_type
+                        floor_data.loc[fl_idx, "HPI"] = hpi
+                        floor_data.loc[fl_idx, "홀랜턴"] = lantern
                         floor_data.loc[fl_idx, "위치"] = "기준층"
                     elif "기타층" in textstring:
                         fl_idx = floor_data.index[(floor_data["위치"] == "")]
-                        floor_data.loc[fl_idx, "홀버튼"] = btn_type
                         floor_data.loc[fl_idx, "JAMB"] = app_jamb
                         floor_data.loc[fl_idx, "JAMB_SPEC"] = jamb_spec
+                        floor_data.loc[fl_idx, "홀버튼"] = btn_type
+                        floor_data.loc[fl_idx, "HPI"] = hpi
+                        floor_data.loc[fl_idx, "홀랜턴"] = lantern
                         floor_data.loc[fl_idx, "위치"] = "기타층"
                     elif "최상층" in textstring:
-                        floor_data.loc[floor_data.index[-1], "홀버튼"] = btn_type
-                        floor_data.loc[floor_data.index[-1], "위치"] = "최상층"
                         floor_data.loc[floor_data.index[-1], "JAMB"] = app_jamb
                         floor_data.loc[floor_data.index[-1], "JAMB_SPEC"] = jamb_spec
+                        floor_data.loc[floor_data.index[-1], "홀버튼"] = btn_type
+                        floor_data.loc[floor_data.index[-1], "HPI"] = hpi
+                        floor_data.loc[floor_data.index[-1], "홀랜턴"] = lantern
+                        floor_data.loc[floor_data.index[-1], "위치"] = "최상층"
                     else:
                         textstring = textstring.replace("층", "")
                         floor_list = special_str_split(textstring)
@@ -294,15 +303,20 @@ def get_hbtn(floor_data):
                             floor_data.loc[fl_idx, "JAMB"] = app_jamb
                             floor_data.loc[fl_idx, "JAMB_SPEC"] = jamb_spec
                             floor_data.loc[fl_idx, "홀버튼"] = btn_type
+                            floor_data.loc[fl_idx, "HPI"] = hpi
+                            floor_data.loc[fl_idx, "홀랜턴"] = lantern
                             floor_data.loc[fl_idx, "위치"] = "기타층"
 
     main_fl_idx = floor_data.index[(floor_data["위치"] == "기준층")][0]
     if main_fl_idx > 0:
         floor_data.loc[:main_fl_idx - 1, "위치"] = "지하층"
 
-    return floor_data
+    if floor_data["홀랜턴"].isnull().sum() > 0:
+        del floor_data["홀랜턴"]
 
-def get_btn_type(titile_pnt, btn_min_gap):
+    return floor_data, remote_cp
+
+def get_hall_item(titile_pnt, btn_min_gap):
     tit_x, tit_y, tit_z = titile_pnt
     for entity in doc.ModelSpace:
         if entity.EntityName == 'AcDbBlockReference' and "LAD-HBTN" in entity.EffectiveName:
@@ -310,12 +324,23 @@ def get_btn_type(titile_pnt, btn_min_gap):
             tit_btn_gap = abs(tit_x-btn_x)+abs(tit_y+btn_y)
             if btn_min_gap > tit_btn_gap:
                 btn_min_gap = tit_btn_gap
+                app_btn_x = btn_x
                 if "SMALL" in entity.EffectiveName.upper():
                     btn_type = "HPB"
                 elif "LARGE" in entity.EffectiveName.upper():
                     btn_type = "HIP"
+    for entity in doc.ModelSpace:
+        if entity.EntityName == 'AcDbBlockReference' and "LAD-HALL-LANTERN" in entity.EffectiveName:
+            lantern_x = entity.InsertionPoint[0]
+            if lantern_x == app_btn_x:
+                lantern = "Y"
+            elif lantern != "Y":
+                lantern = "N"
+        else:
+            lantern = None
 
-    return btn_type
+    return btn_type, lantern
+
 
 def get_jamb_type(titile_pnt, jamb_min_gap, textstring):
     tit_x, tit_y, tit_z = titile_pnt
@@ -326,6 +351,11 @@ def get_jamb_type(titile_pnt, jamb_min_gap, textstring):
             tit_jamb_gap = abs(tit_x - jamb_x)+abs(tit_y - jamb_y)
             if jamb_min_gap > tit_jamb_gap:
                 jamb_min_gap = tit_jamb_gap
+                for att in entity.GetDynamicBlockProperties():  # 동적블럭 속성 가져오기
+                    if att.propertyname == "@VISIBLE" and att.value == "Visible":
+                        hpi = "Y"
+                    elif att.propertyname == "@VISIBLE" and att.value == "Invisible":
+                        hpi = "N"
                 if "CP" in entity.EffectiveName.upper():
                     jamb_spec = "CP" + re.findall("\d+", textstring)[0]
                     app_jamb = "JAMB(CP);"
@@ -334,9 +364,10 @@ def get_jamb_type(titile_pnt, jamb_min_gap, textstring):
                     jamb_ord = jamb_ord + 1
                     app_jamb = "JAMB(" + str(jamb_ord) + ");"
 
-    return app_jamb, jamb_spec
+    return app_jamb, jamb_spec, hpi
 
-floor_and_height, total_floor, stop_floor = get_floor_data("182631")
+floor_and_height, total_floor, stop_floor, remote_cp = get_floor_data("190580")
 print(floor_and_height)
 print("층수 : ", total_floor)
 print("정지층수 : ", stop_floor )
+print("보조제어반 : ", remote_cp)
