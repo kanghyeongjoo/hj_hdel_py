@@ -4,6 +4,9 @@ import glob
 import tkinter
 import pandas as pd
 from tkinter import filedialog
+import time
+
+start = time.time()
 
 acad = win32com.client.Dispatch("AutoCAD.Application")
 
@@ -47,27 +50,46 @@ def layout_find(prjt_no, layout_kind):
 
     return doc
 
+def get_entity(layout_kind):
+    ent_list=[]
+
+    if layout_kind == "E":
+        ent_blo_name = ["LAD-TITLE", "LAD-HBTN-SMALL", "LAD-HBTN-LONG", "LAD-HALL-LANTERN", "LAD-REMOTE-CP", "LAD-DOOR-JAMB"]
+        for entity in doc.ModelSpace:
+            for ent_name in ent_blo_name:
+                if entity.EntityName == 'AcDbBlockReference' and ent_name in entity.EffectiveName:
+                    ent_list.append(entity)
+
+    elif layout_kind == "S":
+        for entity in doc.ModelSpace:
+            if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-FORM-A3-SIMPLE":
+                palette_area = (238 * 388) * entity.XEffectiveScaleFactor
+                ent_list.append({"palette_area" : palette_area})
+            elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TABLE-FLOOR-HEIGHT":
+                ent_list.append({"floor_table_y_cdnt" : entity.InsertionPoint[1]})
+                entity.Explode()
+                for entity in doc.ModelSpace:
+                    if entity.EntityName == 'AcDbText' or entity.EntityName == 'AcDbPolyline':
+                        ent_list.append(entity)
+            elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TABLE-FIRE-DOOR":
+                ent_list.append({"fdoor_table_y_cdnt" : entity.InsertionPoint[1]})
+                entity.Explode()
+                for entity in doc.ModelSpace:
+                    if entity.EntityName == 'AcDbText' or entity.EntityName == 'AcDbPolyline':
+                        ent_list.append(entity)
+
+    return ent_list
+
 def get_floor_data(proj_no):
 
-    global doc
+    global doc, ent_list
     doc = layout_find(proj_no, "S")
-    floor_table_y_cdnt = None
-    fdoor_table_y_cdnt = None
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-FORM-A3-SIMPLE":
-            palette_area = (238 * 388) * entity.XEffectiveScaleFactor # palett 면적
-        elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TABLE-FLOOR-HEIGHT":
-            floor_table_y_cdnt = entity.InsertionPoint[1]
-            entity.Explode() # 층고 테이블 분해
-        elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TABLE-FIRE-DOOR":
-            fdoor_table_y_cdnt = entity.InsertionPoint[1]
-            entity.Explode() # 방화도어 테이블 분해
+    ent_list = get_entity("S")
 
-    floor_table_cdnt = get_table_cdnt("floor", floor_table_y_cdnt, palette_area)
+    floor_table_cdnt, fire_door_table_cdnt = get_table_cdnt()
     floor_data, total_floor, stop_floor = get_floor_height(*floor_table_cdnt)
     df_floor_data = pd.DataFrame(floor_data, columns=["층표기", "층고"])
 
-    fire_door_table_cdnt = get_table_cdnt("door", fdoor_table_y_cdnt, palette_area)
     fire_door_data = get_fire_door(*fire_door_table_cdnt)
     df_floor_data["방화도어"] = ""
     if len(set(fire_door_data.values())) == 1:
@@ -78,88 +100,109 @@ def get_floor_data(proj_no):
             df_floor_data.loc[fl_idx, "방화도어"] = fire_door
 
     doc = layout_find(proj_no, "E")
+    ent_list = get_entity("E")
     df_floor_data, remote_cp = get_hall_part(df_floor_data)
 
     return df_floor_data, total_floor, stop_floor, remote_cp
 
 
-def get_table_cdnt(table_type, table_y_cdnt, palette_area):
+def get_table_cdnt():
+    floor_table_y_cdnt = None
+    fdoor_table_y_cdnt = None
+    for ent in ent_list:
+        if type(ent) == dict:
+            if "palette_area" in ent.keys():
+                palette_area = ent_list.pop(ent_list.index(ent)).get("palette_area")
+            elif "floor_table_y_cdnt" in ent.keys():
+                floor_table_y_cdnt = ent_list.pop(ent_list.index(ent)).get("floor_table_y_cdnt")
+            elif "fdoor_table_y_cdnt" in ent.keys():
+                fdoor_table_y_cdnt = ent_list.pop(ent_list.index(ent)).get("fdoor_table_y_cdnt")
 
-    if table_type == "floor" and table_y_cdnt != None:
-        for entity in doc.ModelSpace:  # 테이블 좌표 구하기
-            if entity.EntityName == 'AcDbPolyline' and table_y_cdnt in entity.Coordinates:
-                start_x_cdnt = entity.Coordinates[0]
-                end_x_cdnt = entity.Coordinates[2]
-                start_y_cdnt = entity.Coordinates[1]
-                end_y_cdnt = entity.Coordinates[5]
+    if floor_table_y_cdnt != None:
+        for ent in ent_list:  # 층 테이블 좌표 구하기
+            if ent.EntityName == 'AcDbPolyline' and floor_table_y_cdnt in ent.Coordinates:
+                fl_st_x_cdnt = ent.Coordinates[0]
+                fl_ed_x_cdnt = ent.Coordinates[2]
+                fl_st_y_cdnt = ent.Coordinates[1]
+                fl_ed_y_cdnt = ent.Coordinates[5]
+                floor_cdnt = [fl_st_x_cdnt, fl_ed_x_cdnt, fl_st_y_cdnt, fl_ed_y_cdnt]
 
-    elif table_type == "floor" and table_y_cdnt == None:
+    elif floor_table_y_cdnt == None:
         text_insert_cdnt = {}
-        for entity in doc.ModelSpace:
-            if entity.EntityName == 'AcDbText' and entity.TextString == "FL / ST":
-                text_base_y_cdnt = entity.TextAlignmentPoint[1]
-            elif entity.EntityName == 'AcDbText' and entity.TextString == "층":
-                text_insert_cdnt.update({entity.TextAlignmentPoint[1]:entity.TextAlignmentPoint[0]}) # text Y:X(Y값은 상이함)
+        for ent in ent_list: # 층 테이블의 데이터 좌표 구하기
+            if ent.EntityName == 'AcDbText' and ent.TextString == "FL / ST":
+                text_base_y_cdnt = ent.TextAlignmentPoint[1]
+            elif ent.EntityName == 'AcDbText' and ent.TextString == "층":
+                text_insert_cdnt.update({ent.TextAlignmentPoint[1]:ent.TextAlignmentPoint[0]}) # text Y:X(Y값은 상이함)
         text_base_x_cdnt = text_insert_cdnt.get(text_base_y_cdnt)
 
-        for entity in doc.ModelSpace:
-            if entity.EntityName == 'AcDbPolyline' and entity.Layer == "LAD-OUTLINE":
-                x_gap = abs(text_base_x_cdnt - entity.Coordinates[0])
-                y_gap = abs(text_base_y_cdnt - entity.Coordinates[1])
+        for ent in ent_list: # 데이터와 가까운 Line 좌표 구하기
+            if ent.EntityName == 'AcDbPolyline' and ent.Layer == "LAD-OUTLINE":
+                x_gap = abs(text_base_x_cdnt - ent.Coordinates[0])
+                y_gap = abs(text_base_y_cdnt - ent.Coordinates[1])
+                gap  = x_gap + y_gap
+                if palette_area > gap: # 방화도어 TABLE과 하고 겹치지 않도록 gap 비교
+                    palette_area = gap
+                    fl_st_x_cdnt = ent.Coordinates[0]
+                    fl_ed_x_cdnt = ent.Coordinates[2]
+                    fl_st_y_cdnt = ent.Coordinates[1]
+                    fl_ed_y_cdnt = ent.Coordinates[5]
+                    floor_cdnt = [fl_st_x_cdnt, fl_ed_x_cdnt, fl_st_y_cdnt, fl_ed_y_cdnt]
+                    print(floor_cdnt)
+
+    if fdoor_table_y_cdnt != None:
+        for ent in ent_list:  # 방화도어 TABLE 좌표 구하기
+            if ent.EntityName == 'AcDbPolyline' and fdoor_table_y_cdnt in ent.Coordinates:
+                fd_st_x_cdnt = ent.Coordinates[2]
+                fd_ed_x_cdnt = ent.Coordinates[0]
+                fd_st_y_cdnt = ent.Coordinates[5]
+                fd_ed_y_cdnt = ent.Coordinates[1]
+                fire_door_cdnt = [fd_st_x_cdnt, fd_ed_x_cdnt, fd_st_y_cdnt, fd_ed_y_cdnt]
+
+
+    elif fdoor_table_y_cdnt == None:
+        for ent in ent_list: # 방화도어 TABLE의 데이터 좌표 구하기
+            if ent.EntityName == 'AcDbText' and ent.TextString == "방화도어 유무":
+                text_base_x_cdnt = ent.TextAlignmentPoint[0]
+                text_base_y_cdnt = ent.TextAlignmentPoint[1]
+
+        for ent in ent_list:  # 데이터와 가까운 Line 좌표 구하기
+            if ent.EntityName == 'AcDbPolyline' and ent.Layer == "LAD-OUTLINE":
+                x_gap = abs(text_base_x_cdnt - ent.Coordinates[2])
+                y_gap = abs(text_base_y_cdnt - ent.Coordinates[1])
                 gap  = x_gap + y_gap
                 if palette_area > gap: # 방화도어 table 하고 겹치지 않도록 gap 비교
                     palette_area = gap
-                    start_x_cdnt = entity.Coordinates[0]
-                    end_x_cdnt = entity.Coordinates[2]
-                    start_y_cdnt = entity.Coordinates[1]
-                    end_y_cdnt = entity.Coordinates[5]
+                    fd_st_x_cdnt = ent.Coordinates[2]
+                    fd_ed_x_cdnt = ent.Coordinates[0]
+                    fd_st_y_cdnt = ent.Coordinates[5]
+                    fd_ed_y_cdnt = ent.Coordinates[1]
+                    fire_door_cdnt = [fd_st_x_cdnt, fd_ed_x_cdnt, fd_st_y_cdnt, fd_ed_y_cdnt]
 
-    if table_type == "door" and table_y_cdnt != None:
-        for entity in doc.ModelSpace:  # 테이블 좌표 구하기
-            if entity.EntityName == 'AcDbPolyline' and table_y_cdnt in entity.Coordinates:
-                start_x_cdnt = entity.Coordinates[2]
-                end_x_cdnt = entity.Coordinates[0]
-                start_y_cdnt = entity.Coordinates[5]
-                end_y_cdnt = entity.Coordinates[1]
+    for ent in ent_list:
+        if ent.EntityName == 'AcDbPolyline':
+            ent_list.remove(ent)
 
-    elif table_type == "door" and table_y_cdnt == None:
-        for entity in doc.ModelSpace:
-            if entity.EntityName == 'AcDbText' and entity.TextString == "방화도어 유무":
-                text_base_x_cdnt = entity.TextAlignmentPoint[0]
-                text_base_y_cdnt = entity.TextAlignmentPoint[1]
-
-        for entity in doc.ModelSpace:
-            if entity.EntityName == 'AcDbPolyline' and entity.Layer == "LAD-OUTLINE":
-                x_gap = abs(text_base_x_cdnt - entity.Coordinates[2])
-                y_gap = abs(text_base_y_cdnt - entity.Coordinates[1])
-                gap  = x_gap + y_gap
-                if palette_area > gap: # 방화도어 table 하고 겹치지 않도록 gap 비교
-                    palette_area = gap
-                    start_x_cdnt = entity.Coordinates[2]
-                    end_x_cdnt = entity.Coordinates[0]
-                    start_y_cdnt = entity.Coordinates[5]
-                    end_y_cdnt = entity.Coordinates[1]
-
-    return start_x_cdnt, end_x_cdnt, start_y_cdnt, end_y_cdnt
+    return floor_cdnt, fire_door_cdnt
 
 
 def get_floor_height(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
     table_data = {}
     x_cdnt_list = []
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbText':
-            x_cdnt = entity.InsertionPoint[0]
-            y_cdnt = entity.InsertionPoint[1]
+    for ent in ent_list:
+        if ent.EntityName == 'AcDbText':
+            x_cdnt = ent.InsertionPoint[0]
+            y_cdnt = ent.InsertionPoint[1]
             if x_cdnt > s_x_cdnt and x_cdnt < e_x_cdnt and y_cdnt < s_y_cdnt and y_cdnt > e_y_cdnt:
-                table_data.update({entity.TextAlignmentPoint: entity.TextString}) # 좌표안에 있는 테이블에 있는 모든 TEXT get
-                if entity.TextString == "층":  # 윗행(층)과 아래행(층고) 나누는 기준
-                    floor_y_cdnt = entity.TextAlignmentPoint[1]
-                elif entity.TextString == "층고":  # 윗행(층)과 아래행(층고) 나누는 기준
-                    floor_hei_y_cdnt = entity.TextAlignmentPoint[1]
-                elif entity.TextString == "FL / ST":  # 층수 구하기
-                    flst_x_cdnt = entity.TextAlignmentPoint[0]
+                table_data.update({ent.TextAlignmentPoint: ent.TextString}) # 좌표안에 있는 테이블에 있는 모든 TEXT get
+                if ent.TextString == "층":  # 윗행(층)과 아래행(층고) 나누는 기준
+                    floor_y_cdnt = ent.TextAlignmentPoint[1]
+                elif ent.TextString == "층고":  # 윗행(층)과 아래행(층고) 나누는 기준
+                    floor_hei_y_cdnt = ent.TextAlignmentPoint[1]
+                elif ent.TextString == "FL / ST":  # 층수 구하기
+                    flst_x_cdnt = ent.TextAlignmentPoint[0]
                 else:
-                    x_cdnt_list.append(entity.TextAlignmentPoint[0])
+                    x_cdnt_list.append(ent.TextAlignmentPoint[0])
 
     fl_st_data = table_data.get((flst_x_cdnt, floor_hei_y_cdnt, 0.0))
     total_floor = re.findall("(\d+)/", fl_st_data)[0]
@@ -182,18 +225,18 @@ def get_floor_height(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
 def get_fire_door(s_x_cdnt, e_x_cdnt, s_y_cdnt, e_y_cdnt):
     table_data = {}
     x_cdnt_list = []
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbText':
-            x_cdnt = entity.InsertionPoint[0]
-            y_cdnt = entity.InsertionPoint[1]
+    for ent in ent_list:
+        if ent.EntityName == 'AcDbText':
+            x_cdnt = ent.InsertionPoint[0]
+            y_cdnt = ent.InsertionPoint[1]
             if x_cdnt > s_x_cdnt and x_cdnt < e_x_cdnt and y_cdnt < s_y_cdnt and y_cdnt > e_y_cdnt:
-                table_data.update({entity.TextAlignmentPoint: entity.TextString}) # 좌표안에 있는 테이블에 있는 모든 TEXT get
-                if entity.TextString == "층":  # 윗행(층)과 아래행(층고) 나누는 기준
-                    floor_y_cdnt = entity.TextAlignmentPoint[1]
-                elif "방화도어" in entity.TextString:  # 윗행(층)과 아래행(층고) 나누는 기준
-                    fire_door_y_cdnt = entity.TextAlignmentPoint[1]
+                table_data.update({ent.TextAlignmentPoint: ent.TextString}) # 좌표안에 있는 테이블에 있는 모든 TEXT get
+                if ent.TextString == "층":  # 윗행(층)과 아래행(층고) 나누는 기준
+                    floor_y_cdnt = ent.TextAlignmentPoint[1]
+                elif "방화도어" in ent.TextString:  # 윗행(층)과 아래행(층고) 나누는 기준
+                    fire_door_y_cdnt = ent.TextAlignmentPoint[1]
                 else:
-                    x_cdnt_list.append(entity.TextAlignmentPoint[0])
+                    x_cdnt_list.append(ent.TextAlignmentPoint[0])
 
     x_cdnt_list = list(set(x_cdnt_list)) # 중복 좌표 삭제
     x_cdnt_list.sort() # x좌표 순서대로 정리
@@ -259,16 +302,16 @@ def get_hall_part(floor_data):
     jamb_dict={}
     remote_cp = "N"
     floor_data[["JAMB", "JAMB_SPEC","홀버튼", "HPI","위치"]] = ""
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-REMOTE-CP":
+    for ent in ent_list:
+        if ent.EffectiveName == "LAD-REMOTE-CP":
             remote_cp = "Y"
-        elif entity.EntityName == 'AcDbBlockReference' and entity.EffectiveName == "LAD-TITLE":
-            dwg_boundary = (238 * 388) * entity.XEffectiveScaleFactor # 도면 경계 SIZE * 축적
-            btn_type, lantern = get_hall_item(entity.InsertionPoint, dwg_boundary)
-            for att in entity.GetAttributes():
+        elif ent.EffectiveName == "LAD-TITLE":
+            dwg_boundary = (238 * 388) * ent.XEffectiveScaleFactor # 도면 경계 SIZE * 축적
+            btn_type, lantern = get_hall_item(ent.InsertionPoint, dwg_boundary)
+            for att in ent.GetAttributes():
                 if att.tagstring == "@TITLE-T":
-                    app_jamb, jamb_spec, hpi = get_jamb_type(entity.InsertionPoint, dwg_boundary, att.textstring)
-            for att in entity.GetAttributes():
+                    app_jamb, jamb_spec, hpi = get_jamb_type(ent.InsertionPoint, dwg_boundary, att.textstring)
+            for att in ent.GetAttributes():
                 if att.tagstring == "@TITLE-B":
                     textstring = att.textstring.replace(" ", "")
                     if "기준층" in textstring:
@@ -318,20 +361,20 @@ def get_hall_part(floor_data):
 
 def get_hall_item(titile_pnt, btn_min_gap):
     tit_x, tit_y, tit_z = titile_pnt
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and "LAD-HBTN" in entity.EffectiveName:
-            btn_x, btn_y, btn_z = entity.InsertionPoint
+    for ent in ent_list:
+        if "LAD-HBTN" in ent.EffectiveName:
+            btn_x, btn_y, btn_z = ent.InsertionPoint
             tit_btn_gap = abs(tit_x-btn_x)+abs(tit_y+btn_y)
             if btn_min_gap > tit_btn_gap:
                 btn_min_gap = tit_btn_gap
                 app_btn_x = btn_x
-                if "SMALL" in entity.EffectiveName.upper():
+                if "SMALL" in ent.EffectiveName.upper():
                     btn_type = "HPB"
-                elif "LARGE" in entity.EffectiveName.upper():
+                elif "LARGE" in ent.EffectiveName.upper():
                     btn_type = "HIP"
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and "LAD-HALL-LANTERN" in entity.EffectiveName:
-            lantern_x = entity.InsertionPoint[0]
+    for ent in ent_list:
+        if "LAD-HALL-LANTERN" in ent.EffectiveName:
+            lantern_x = ent.InsertionPoint[0]
             if lantern_x == app_btn_x:
                 lantern = "Y"
             elif lantern != "Y":
@@ -345,18 +388,18 @@ def get_hall_item(titile_pnt, btn_min_gap):
 def get_jamb_type(titile_pnt, jamb_min_gap, textstring):
     tit_x, tit_y, tit_z = titile_pnt
     jamb_ord = 0
-    for entity in doc.ModelSpace:
-        if entity.EntityName == 'AcDbBlockReference' and "LAD-DOOR-JAMB" in entity.EffectiveName:
-            jamb_x, jamb_y, jamb_z = entity.InsertionPoint
+    for ent in ent_list:
+        if "LAD-DOOR-JAMB" in ent.EffectiveName:
+            jamb_x, jamb_y, jamb_z = ent.InsertionPoint
             tit_jamb_gap = abs(tit_x - jamb_x)+abs(tit_y - jamb_y)
             if jamb_min_gap > tit_jamb_gap:
                 jamb_min_gap = tit_jamb_gap
-                for att in entity.GetDynamicBlockProperties():  # 동적블럭 속성 가져오기
+                for att in ent.GetDynamicBlockProperties():  # 동적블럭 속성 가져오기
                     if att.propertyname == "@VISIBLE" and att.value == "Visible":
                         hpi = "Y"
                     elif att.propertyname == "@VISIBLE" and att.value == "Invisible":
                         hpi = "N"
-                if "CP" in entity.EffectiveName.upper():
+                if "CP" in ent.EffectiveName.upper():
                     jamb_spec = "CP" + re.findall("\d+", textstring)[0]
                     app_jamb = "JAMB(CP);"
                 else:
@@ -366,8 +409,10 @@ def get_jamb_type(titile_pnt, jamb_min_gap, textstring):
 
     return app_jamb, jamb_spec, hpi
 
-floor_and_height, total_floor, stop_floor, remote_cp = get_floor_data("190580")
+floor_and_height, total_floor, stop_floor, remote_cp = get_floor_data("190390")
 print(floor_and_height)
 print("층수 : ", total_floor)
 print("정지층수 : ", stop_floor )
 print("보조제어반 : ", remote_cp)
+
+print("걸린 시간 : ", time.time() - start)
