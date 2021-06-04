@@ -6,7 +6,7 @@ import re
 acad = win32com.client.Dispatch("AutoCAD.Application")
 doc = acad.ActiveDocument
 
-ent_blo_name = ["LAD-RAIL", "LAD-OPB", "LAD-CWT", "LAD-GOV", "DIM_ENT", "LAD-CWT"]
+ent_blo_name = ["LAD-RAIL", "LAD-OPB", "LAD-CWT", "LAD-GOV", "DIM_ENT", "LAD-CWT", "LAD-CP"]
 ent_group = dict.fromkeys(ent_blo_name)
 for entity in doc.ModelSpace:
     if entity.EntityName == "AcDbBlockReference" and entity.EffectiveName =="LAD-HOISTWAY-HP-SC":
@@ -18,6 +18,8 @@ for entity in doc.ModelSpace:
     elif entity.EntityName == "AcDbBlockReference" and entity.EffectiveName =="LAD-CAR-1SCO":
         ent_group.update({"car_center":entity.InsertionPoint})
         entity.explode()
+    elif entity.EntityName == "AcDbBlockReference" and entity.EffectiveName == "LAD-CAR-1SCO-CP":
+        ent_group.update({"platform_cp": entity.InsertionPoint})
 
 for entity in doc.ModelSpace:
     if entity.EntityName == "AcDbBlockReference":
@@ -74,8 +76,10 @@ for dim_ent in ent_group["DIM_ENT"]:
             car_size.update({"카중심:세로": car_cen_v})
         elif size_name == "카바닥(세로)":
             car_fro_y = min(int(pt1[1]), int(pt2[1]))
+            car_rear_y = max(int(pt1[1]), int(pt2[1]))
             car_ee = int(ent_group["car_center"][1]) - car_fro_y
             car_size.update({"CAR;EE": car_ee})
+            ent_group.update({"car_rear_y":car_rear_y})
 
 
 if len(ent_group["LAD-OPB"]) > 1:
@@ -126,19 +130,19 @@ for cwt_ent in ent_group["LAD-CWT"]:
         cwt_x_cdnt = int(cwt_ent.InsertionPoint[0])
         cwt_y_cdnt = int(cwt_ent.InsertionPoint[1])
         if abs(cwt_x_cdnt - int(ent_group["car_center"][0])) < abs(cwt_y_cdnt - int(ent_group["car_center"][1])): #후락
-            for cwt_att in cwt_ent.GetDynamicBlockProperties():
-                if cwt_att.propertyname == "@HEIGHT-T":
-                    weight_t = cwt_att.value # subweight 상단폭
-                elif cwt_att.propertyname == "@HEIGHT-B":
-                     weight_b = cwt_att.value # subweight 하단폭
+            for cwt_prt in cwt_ent.GetDynamicBlockProperties():
+                if cwt_prt.propertyname == "@HEIGHT-T":
+                    weight_t = cwt_prt.value # subweight 상단폭
+                elif cwt_prt.propertyname == "@HEIGHT-B":
+                     weight_b = cwt_prt.value # subweight 하단폭
             weight_w = int(weight_t + weight_b)
             car_size.update({"cwt위치": "REAR"})
         elif abs(cwt_x_cdnt - int(ent_group["car_center"][0])) > abs(cwt_y_cdnt - int(ent_group["car_center"][1])): # 횡락
-            for cwt_att in cwt_ent.GetDynamicBlockProperties():
-                if cwt_att.propertyname == "@WIDTH-L":
-                    weight_l = cwt_att.value # subweight 좌측폭
-                elif cwt_att.propertyname == "@WIDTH-R":
-                     weight_r = cwt_att.value
+            for cwt_prt in cwt_ent.GetDynamicBlockProperties():
+                if cwt_prt.propertyname == "@WIDTH-L":
+                    weight_l = cwt_prt.value # subweight 좌측폭
+                elif cwt_prt.propertyname == "@WIDTH-R":
+                     weight_r = cwt_prt.value
             weight_w = int(weight_l + weight_r) # subweight 우측폭
             if cwt_x_cdnt < int(ent_group["car_center"][0]):
                 cwt_pst = "LEFT"
@@ -146,7 +150,6 @@ for cwt_ent in ent_group["LAD-CWT"]:
                 cwt_pst = "RIGHT"
             car_size.update({"cwt위치": cwt_pst})
         car_size.update({"WEIGHT폭":weight_w})
-
 
 
 for rail_ent in ent_group["LAD-RAIL"]:
@@ -176,7 +179,54 @@ else:
         car_size.update({"car_gov_위치" : "F/R"}) # FROTN & RIGHT
 
 
+cp_ent = ent_group["LAD-CP"][0]
+if cp_ent == None: #spec에서 얻은 기종으로 구분하여 pass할 것.
+    pass
+elif cp_ent.EffectiveName == "LAD-CP" or cp_ent.EffectiveName == "LAD-CP-DOOR": # 승강장 jamb 취부형 제어반
+    for cp_prt in cp_ent.GetDynamicBlockProperties():
+        if cp_prt.propertyname == "@CASE-L":
+            case_l = cp_prt.value
+        elif cp_prt.propertyname == "@CASE-R":
+            case_r = cp_prt.value
+    sj = int(case_l + case_r)
+    car_size.update({"CP JAMB 폭(SJ)":sj})
+    if cp_ent.EffectiveName == "LAD-CP":
+        cp_type = "J"
+    elif cp_ent.EffectiveName == "LAD-CP-DOOR":
+        cp_type = "C"
+    if cp_ent.InsertionPoint[0] < ent_group["platform_cp"][0]:
+        cp_pst = "L"
+    else:
+        cp_pst = "R"
+    car_size.update({"MRL;CP JAMB TYPE":cp_type + cp_pst})
+elif cp_ent.EffectiveName != "LAD-CP-AC" :#승강로 제어반
+    car_size.update({"승강로 CP":"Y"})
+    cp_x_cdnt = cp_ent.InsertionPoint[0]
+    cp_y_cdnt = cp_ent.InsertionPoint[1]
+    if cp_y_cdnt > ent_group["car_rear_y"]:
+        car_size.update({"제어반 위치":"REAR"})
+    elif cp_y_cdnt > ent_group["car_center"][1]:
+        if cp_x_cdnt < ent_group["car_center"][0]:
+            car_size.update({"제어반 위치":"R/R"})
+        else:
+            car_size.update({"제어반 위치": "R/L"})
+    elif cp_y_cdnt < ent_group["car_center"][1]:
+        if cp_x_cdnt < ent_group["car_center"][0]:
+            car_size.update({"제어반 위치":"F/R"})
+        else:
+            car_size.update({"제어반 위치": "F/L"})
+
+
 print(car_size)
 
 df_el = pd.DataFrame([car_size])
 print(df_el)
+
+
+
+
+
+
+
+
+
