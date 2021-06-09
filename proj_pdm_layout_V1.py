@@ -1,11 +1,15 @@
-import pandas as pd
 import win32com.client
+import tkinter
+from tkinter import filedialog
 import re
-import time
+import glob
 import requests
 from bs4 import BeautifulSoup
+import pandas as pd
+import time
 
 start = time.time()
+acad = win32com.client.Dispatch("AutoCAD.Application")
 
 # get ouid
 def get_ouid(proj_no):
@@ -38,11 +42,49 @@ def get_pdm_spec(proj_no):
     df_pdm_spec.columns = ["PDM_DATA"]
     return df_pdm_spec
 
+def layout_open(prjt_no, layout_kind):
+
+    for filename in glob.glob("D:\DAILY\*.dwg"):
+        file_kind = re.findall("(\w)[.]DWG", filename.upper())[0]
+        if prjt_no in filename and layout_kind in file_kind:
+            layout_path = filename
+    try:
+        doc = acad.Documents.Open(layout_path)
+    except:
+        root = tkinter.Tk()
+        root.withdraw()
+        filename = filedialog.askopenfilename(initialdir=r"C:\Users\Administrator\Downloads", title= prjt_no+"현장 Layout을 선택 바랍니다.",
+                                                   filetypes=(("dwg files", "*.dwg"), ("all files", "*.*")))
+        filename_split = filename.split("/")
+        sel_prjt_no = re.findall("\w?\d+", filename_split[-1].upper())[0]
+        sel_kind = re.findall("(\w)[.]DWG", filename.upper())
+        if prjt_no in sel_prjt_no   and layout_kind in sel_kind:
+            doc = acad.Documents.Open(filename)
+        else:
+            print("선택한 도면이 올바르지 않습니다. 다시 진행 바랍니다.")
+            return
+
+    return doc
+
+def layout_find(prjt_no, layout_kind):
+    global doc
+    doc = None
+    if acad.Documents.Count == 0:
+        doc = layout_open(prjt_no, layout_kind)
+    else:
+        for document in acad.Documents:
+            dwg_f_kind = re.findall("(\w)[.]DWG", document.Name.upper())
+            dwg_f_prjt_no = re.findall("\w?\d+", document.Name.upper())[0]
+            if dwg_f_prjt_no == prjt_no and layout_kind in dwg_f_kind:
+                doc = document
+
+    if doc == None:
+        doc = layout_open(prjt_no, layout_kind)
+
+    return doc
 
 def get_entity(layout_kind):
-    acad = win32com.client.Dispatch("AutoCAD.Application")
-    global doc, ent_group
-    doc = acad.ActiveDocument
+    global ent_group
     if layout_kind == "H":
         ent_blo_name = ["LAD-RAIL", "LAD-OPB", "LAD-CWT", "LAD-GOV", "DIM_ENT", "LAD-CWT", "LAD-CP"]
         ent_group = dict.fromkeys(ent_blo_name)
@@ -76,6 +118,64 @@ def get_entity(layout_kind):
                     ent_group["DIM_ENT"].append(entity)
                 else:
                     ent_group["DIM_ENT"].append(entity)
+
+    if layout_kind == "M":
+        ent_blo_name = ["LAD-HOLE", "U107", "LAD-HBTN-HOLE", "LAD-CP", "LAD-GOV", "LAD-TM", "DIM_ENT", "hst_cent", "hst_hole_cent", "door_cdnt"]
+        ent_group = dict.fromkeys(ent_blo_name)
+        for entity in doc.ModelSpace:
+            if entity.EntityName == 'AcDbBlockReference':
+                if "LAD-HOISTWAY" in entity.EffectiveName and entity.EffectiveName[-1] == "H":
+                    ent_group.update({"hst_hole_cent": entity.InsertionPoint})
+                    entity.explode()
+                elif "LAD-HOISTWAY" in entity.EffectiveName:
+                    ent_group.update({"hst_cent": entity.InsertionPoint})
+                    entity.explode()
+                elif entity.EffectiveName == "A$C4bb02043":
+                    entity.explode()
+                else:
+                    for ent_name in ent_blo_name:
+                        if ent_name in entity.EffectiveName:
+                            if ent_group[ent_name] == None:
+                                ent_group[ent_name] = []
+                                ent_group[ent_name].append(entity)
+                            else:
+                                ent_group[ent_name].append(entity)
+
+        for entity in doc.ModelSpace:
+            if entity.EntityName == "AcDbRotatedDimension" and entity.TextOverride != "":
+                if ent_group["DIM_ENT"] == None:
+                    ent_group["DIM_ENT"] = []
+                    ent_group["DIM_ENT"].append(entity)
+                else:
+                    ent_group["DIM_ENT"].append(entity)
+            elif entity.EntityName == "AcDbText" and "기계실 출입문" in entity.TextString:
+                ent_group.update({"door_cdnt":entity.InsertionPoint})
+            elif ent_group["LAD-CP"] == None and entity.EntityName == 'AcDbBlockReference' and "LAD-CP" in entity.EffectiveName:
+                ent_group.update({"LAD-CP":[entity]})
+
+        if ent_group["hst_cent"] == None:
+            if ent_group["LAD-TM"] != None:
+                hst_cent = ent_group["LAD-TM"][0].InsertionPoint
+                ent_group.update({"hst_cent": hst_cent})
+            else:
+                print("hoistway 중심점을 확인할 수 없습니다.")  # 이 부분은 나중에 직접 입력 또는 CAD에서 직접 선택할 수 있도록 한다.
+
+        if ent_group["hst_hole_cent"] == None:
+            if ent_group["LAD-HOLE"] != None:
+                hst_hole_cent = ent_group["LAD-HOLE"][0].InsertionPoint
+                ent_group.update({"hst_hole_cent": hst_hole_cent})
+            elif ent_group["U107"] != None:
+                hst_hole_cent = ent_group["U107"][0].InsertionPoint
+                ent_group.update({"hst_hole_cent": hst_hole_cent})
+            else:
+                print("hoistway hole 중심점을 확인할 수 없습니다.")  # 이 부분은 나중에 직접 입력 또는 CAD에서 직접 선택할 수 있도록 한다.
+
+    doc.SendCommand('setxdata ')
+
+    adoc = acad.ActiveDocument
+    while adoc.Name != doc.Name:
+        time.sleep(0.1)
+        adoc = acad.ActiveDocument
 
     return ent_group
 
@@ -112,8 +212,8 @@ def get_floor_plan_data(ent_group):
             elif spec_att.TagString == "@DRIVE":
                 if "WBSS" in spec_att.TextString:
                     att_value = "WBSS2_(SSVF)"
-                elif "LXVF" in spec_att.TagString or "WBLX" in spec_att.TagString:
-                    att_value = "WBLX1"
+                elif "LXVF" in spec_att.TextString or "WBLX" in spec_att.TextString:
+                    att_value = "WBLX1_(LXVF)"
                 else:
                     att_value = spec_att.TextString + "은 사양 추가 요청바랍니다."
                 spec_data.update({trs_tag_name[spec_att.TagString]:att_value})
@@ -199,9 +299,8 @@ def get_floor_plan_data(ent_group):
                     spec_data.update({under_name: int(att_value)})
 
     floor_plan_data = {}
-    hoistway_m = ent_group["hoistway_m"]
-    floor_plan_data.update({"EL_EHM":hoistway_m})
-    doc.SendCommand('setxdata ')
+    if ent_group["hoistway_m"] != None:
+        floor_plan_data.update({"EL_EHM":ent_group["hoistway_m"]}) # 승강로 재질
     dim_name = {"균형추레일간의거리(세로)":"EL_ECWBG", "승강로내부(세로)":"EL_EHV", "카바닥(세로)":"EL_ECBB", "카내부(세로)":"EL_ECCB", "카바닥(가로)":"EL_ECAA", "출입구유효폭(가로)":"EL_ECJJ", "카레일간의거리(가로)":"EL_ECBG", "승강로내부(가로)":"EL_EHH", "카내부(가로)":"EL_ECCA"}
     for dim_ent in ent_group["DIM_ENT"]:
         del_s = dim_ent.TextOverride.replace(" ", "")
@@ -360,62 +459,183 @@ def get_floor_plan_data(ent_group):
             floor_plan_data.update({"EL_ECGP" : "F/R"}) # FROTN & RIGHT
 
 
-    cp_ent = ent_group["LAD-CP"][0]
-    if cp_ent == None: #spec에서 얻은 기종으로 구분하여 pass할 것.
+    if ent_group["LAD-CP"] == None:
         pass
-    elif cp_ent.EffectiveName == "LAD-CP" or cp_ent.EffectiveName == "LAD-CP-DOOR": # 승강장 jamb 취부형 제어반
-        for cp_prt in cp_ent.GetDynamicBlockProperties():
-            if cp_prt.propertyname == "@CASE-L":
-                case_l = cp_prt.value
-            elif cp_prt.propertyname == "@CASE-R":
-                case_r = cp_prt.value
-            if "case_l" in locals() and "case_r" in locals():
-                break
-        sj = int(case_l + case_r)
-        floor_plan_data.update({"EL_EMRLCJW":sj}) # MRL;CP JAMB 폭(SJ)
-        if cp_ent.EffectiveName == "LAD-CP":
-            cp_type = "J"
-        elif cp_ent.EffectiveName == "LAD-CP-DOOR":
-            cp_type = "C"
-        if cp_ent.InsertionPoint[0] < ent_group["platform_cp"][0]:
-            cp_pst = "L"
-        else:
-            cp_pst = "R"
-        floor_plan_data.update({"EL_EMRLCJ": cp_type + cp_pst}) # MRL;CP JAMB TYPE
-    elif cp_ent.EffectiveName != "LAD-CP-AC" :#승강로 제어반
-        floor_plan_data.update({"EL_EMRLHSCP": "Y"})
-        cp_x_cdnt = cp_ent.InsertionPoint[0]
-        cp_y_cdnt = cp_ent.InsertionPoint[1]
-        if cp_y_cdnt > ent_group["car_rear_y"]:
-            floor_plan_data.update({"승강로 제어반 위치": "REAR"})
-        elif cp_y_cdnt > ent_group["car_center"][1]:
-            if cp_x_cdnt < ent_group["car_center"][0]:
-                floor_plan_data.update({"승강로 제어반 위치": "R/R"})
+    else:
+        cp_ent = ent_group["LAD-CP"][0]
+        if cp_ent.EffectiveName == "LAD-CP" or cp_ent.EffectiveName == "LAD-CP-DOOR": # 승강장 jamb 취부형 제어반
+            for cp_prt in cp_ent.GetDynamicBlockProperties():
+                if cp_prt.propertyname == "@CASE-L":
+                    case_l = cp_prt.value
+                elif cp_prt.propertyname == "@CASE-R":
+                    case_r = cp_prt.value
+                if "case_l" in locals() and "case_r" in locals():
+                    break
+            sj = int(case_l + case_r)
+            floor_plan_data.update({"EL_EMRLCJW":sj}) # MRL;CP JAMB 폭(SJ)
+            if cp_ent.EffectiveName == "LAD-CP":
+                cp_type = "J"
+            elif cp_ent.EffectiveName == "LAD-CP-DOOR":
+                cp_type = "C"
+            if cp_ent.InsertionPoint[0] < ent_group["platform_cp"][0]:
+                cp_pst = "L"
             else:
-                floor_plan_data.update({"승강로 제어반 위치": "R/L"})
-        elif cp_y_cdnt < ent_group["car_center"][1]:
-            if cp_x_cdnt < ent_group["car_center"][0]:
-                floor_plan_data.update({"승강로 제어반 위치": "F/R"})
-            else:
-                floor_plan_data.update({"승강로 제어반 위치": "F/L"})
+                cp_pst = "R"
+            floor_plan_data.update({"EL_EMRLCJ": cp_type + cp_pst}) # MRL;CP JAMB TYPE
+        elif cp_ent.EffectiveName != "LAD-CP-AC" :#승강로 제어반
+            floor_plan_data.update({"EL_EMRLHSCP": "Y"})
+            cp_x_cdnt = cp_ent.InsertionPoint[0]
+            cp_y_cdnt = cp_ent.InsertionPoint[1]
+            if cp_y_cdnt > ent_group["car_rear_y"]:
+                floor_plan_data.update({"승강로 제어반 위치": "REAR"})
+            elif cp_y_cdnt > ent_group["car_center"][1]:
+                if cp_x_cdnt < ent_group["car_center"][0]:
+                    floor_plan_data.update({"승강로 제어반 위치": "R/R"})
+                else:
+                    floor_plan_data.update({"승강로 제어반 위치": "R/L"})
+            elif cp_y_cdnt < ent_group["car_center"][1]:
+                if cp_x_cdnt < ent_group["car_center"][0]:
+                    floor_plan_data.update({"승강로 제어반 위치": "F/R"})
+                else:
+                    floor_plan_data.update({"승강로 제어반 위치": "F/L"})
 
     return spec_data, floor_plan_data
 
+def get_mr_data(entity):
+    mr_data = {}
+    for dim_ent in ent_group["DIM_ENT"]:
+        del_s = dim_ent.TextOverride.replace(" ", "")
+        size_name = re.findall("[가-힣]+", del_s)[0]
+        Xdata = dim_ent.GetXData("", "Type", "Data")
+        pt1 = Xdata[1][-2]
+        pt2 = Xdata[1][-1]
+        if int(pt1[0]) == int(pt2[0]):
+            size_name = size_name + "(세로)"
+        elif int(pt1[1]) == int(pt2[1]):
+            size_name = size_name + "(가로)"
+        else:
+            gaps = {}
+            gaps.update({abs(int(pt1[0]) - int(pt2[0])): "(가로)"})
+            gaps.update({abs(int(pt1[1]) - int(pt2[1])): "(세로)"})
+            size_name = size_name + gaps[round(dim_ent.Measurement)]
 
-df_spec = get_pdm_spec("188402L01")
-entity = get_entity("H")
-floor_plan_spec, floor_plan_data = get_floor_plan_data(entity)
+        size = round(dim_ent.Measurement)
+        if size_name == "승강로내부(가로)":
+            hoist_lft_x = min(int(pt1[0]), int(pt2[0]))
+            if int(ent_group["hst_cent"][0]) < hoist_lft_x:
+                size_name = "EL_EHH_CHK"
+            else:
+                size_name = "EL_EHH"
+        elif size_name == "승강로내부(세로)":
+            ver_dim_x = int(pt1[0])
+            if ver_dim_x < int(ent_group["hst_cent"][0]):
+                size_name = "EL_EHV"
+            elif ver_dim_x > int(ent_group["hst_hole_cent"][0]):
+                size_name = "EL_EHV_CHK"
+            else:
+                gap_hoistway = abs(ver_dim_x - int(ent_group["hst_cent"][0]))
+                gap_hoistway_hole = abs(ver_dim_x - int(ent_group["hst_hole_cent"][0]))
+                if min(gap_hoistway, gap_hoistway_hole) == gap_hoistway:
+                    size_name = "EL_EHV"
+                else:
+                    size_name = "EL_EHV_CHK"
+        mr_data.update({size_name: int(size)})
 
-for code, val in floor_plan_spec.items():
-    df_spec.loc[code, "승강로_평면도"] = val
-df_spec = df_spec.fillna({"승강로_평면도":""})
+    if mr_data["EL_EHH"] == mr_data["EL_EHH_CHK"]:
+        del mr_data["EL_EHH_CHK"]
+    if mr_data["EL_EHV"] == mr_data["EL_EHV_CHK"]:
+        del mr_data["EL_EHV_CHK"]
 
-for code, val in floor_plan_data.items():
-    if df_spec.loc[code, "승강로_평면도"] == "":
-        df_spec.loc[code, "승강로_평면도"] == val
-    elif df_spec.loc[code, "승강로_평면도"] != val:
-        df_spec.loc[code, "승강로_평면도(SPEC)"] = val
+    if ent_group["LAD-CP"] != None:
+        cp_ent = ent_group["LAD-CP"][0]
+        for cp_att in cp_ent.GetAttributes():
+            if cp_att.TagString == "@TEXT":
+                cp_cdnt = cp_att.TextAlignmentPoint
 
-print(df_spec)
+        if ent_group["LAD-HBTN-HOLE"] != None:
+            duct_ent = ent_group["LAD-HBTN-HOLE"][0]
+            hole_ent_x_gap = int(ent_group["hst_cent"][0] - ent_group["hst_hole_cent"][0])
+            duct_x = int(duct_ent.InsertionPoint[0]) + hole_ent_x_gap
+            cp_duct_x = abs(int(cp_cdnt[0]) - duct_x)
+            cp_duct_y = abs(int(cp_cdnt[1] - duct_ent.InsertionPoint[1]))
+            cp_to_duct = round(cp_duct_x + cp_duct_y, -3) + 1250
+            mr_data.update({"EL_EDTA":int(cp_to_duct)})
 
+        if ent_group["LAD-TM"] != None:
+            tm_ent = ent_group["LAD-TM"][0]
+            for tm_prt in tm_ent.GetDynamicBlockProperties():
+                if tm_prt.propertyname == "@PP":
+                    mr_data.update({"EL_EPPY":int(tm_prt.value)})
+                    break
+            cp_tm_x = abs(int(cp_cdnt[0] - tm_ent.InsertionPoint[0]))
+            cp_tm_y = abs(int(cp_cdnt[1] - tm_ent.InsertionPoint[1]))
+            cp_to_tm = round(cp_tm_x + cp_tm_y + 1500, -3) + 1000
+            mr_data.update({"EL_EDTB": int(cp_to_tm)})
+
+        if ent_group["door_cdnt"] != None:
+            cp_door_x = abs(int(cp_cdnt[0] - ent_group["door_cdnt"][0]))
+            cp_door_y = abs(int(cp_cdnt[1] - ent_group["door_cdnt"][1]))
+            cp_to_pwr = round(cp_door_x + cp_door_y + 1650, -3) + 1000
+            mr_data.update({"EL_EDTC": int(cp_to_pwr)})
+
+        if ent_group["LAD-GOV"] != None:
+            for gov_ent in ent_group["LAD-GOV"]:
+                if gov_ent.EffectiveName[-1] == "H":
+                    for gov_h_prt in gov_ent.GetDynamicBlockProperties():
+                        if gov_h_prt.propertyname == "@DIST":
+                            gov_name = "EL_ECGV_CHK"
+                            gov_spec = "DG" + str(int(gov_h_prt.value))
+                            break
+                else:
+                    gov_y_cdnt = gov_ent.InsertionPoint[1]
+                    for gov_prt in gov_ent.GetDynamicBlockProperties():
+                        if gov_prt.propertyname == "@DIST":
+                            gov_name = "EL_ECGV"
+                            gov_spec = "DG" + str(int(gov_prt.value))
+                            break
+                    cp_gov_x = abs(int(cp_cdnt[0] - gov_ent.InsertionPoint[0]))
+                    cp_gov_y = abs(int(cp_cdnt[1] - (gov_y_cdnt + gov_prt.value)))
+                    gov_cc = abs(int(ent_group["hst_cent"][1] - gov_ent.InsertionPoint[1]))
+                    cp_to_gov = round(cp_gov_x + cp_gov_y + 150, -3) + 1000
+                    mr_data.update({"EL_EDTE":cp_to_gov, "EL_ECCC":int(gov_cc)})
+                mr_data.update({gov_name:gov_spec})
+
+        if mr_data["EL_ECGV"] == mr_data["EL_ECGV_CHK"]:
+            del mr_data["EL_ECGV_CHK"]
+
+    return mr_data
+
+
+def get_proj_data(proj_no):
+
+    df_spec = get_pdm_spec(proj_no)
+
+    doc = layout_find(proj_no[:6], "H")
+    entity = get_entity("H")
+    floor_plan_spec, floor_plan_data = get_floor_plan_data(entity)
+
+    for code, val in floor_plan_spec.items():
+        df_spec.loc[code, "승강로_평면도"] = val
+    df_spec = df_spec.fillna({"승강로_평면도":""})
+
+    for code, val in floor_plan_data.items():
+        if df_spec.loc[code, "승강로_평면도"] == "":
+            df_spec.loc[code, "승강로_평면도"] == val
+        elif df_spec.loc[code, "승강로_평면도"] != val:
+            df_spec.loc[code, "승강로_평면도(SPEC)"] = val
+        else:
+            df_spec.loc[code, "승강로_평면도(SPEC)"] = val
+
+    doc = layout_find(proj_no[:6], "M")
+    entity = get_entity("M")
+    mr_data = get_mr_data(entity)#mr일 때 실행하기, mrl은 기계담당자 확인 후 로직 작성 요망
+
+    for code, val in mr_data.items():
+        df_spec.loc[code, "기계실_배치도"] = val
+    df_spec = df_spec.fillna({"기계실_배치도":""})
+
+    return df_spec
+
+proj_data = get_proj_data("188899L01")
+print(proj_data)
 print("걸린 시간 : ", time.time() - start)
